@@ -20,9 +20,25 @@
 퀘스트 아이템은 이 패널에서 드래그가 막혀 있습니다. 시야가 막힌 아이템도 제외되고요
 (발밑 0.35m 안쪽은 예외 — 바닥에 살짝 파묻힌 것도 주울 수 있게).
 
-## 설치
+## 설치 — 직접 빌드하셔야 합니다
 
-`DrakiaXYZ-LootRadius.dll` 을 `BepInEx\plugins\` 에 넣으면 끝입니다. 서버 모드는 없습니다.
+SPT 런처는 플러그인이 참조하는 **`spt-reflection` 어셈블리 버전**을 읽어서 "몇 버전용으로
+빌드됐는지"를 판정하고, 안 맞으면 게임 실행 자체를 막습니다:
+
+> These mods were built for a different version of SPT than the one you are running (4.1.5):
+> DrakiaXYZ-LootRadius.dll (built for SPT 1.0.0)
+
+즉 **남이 빌드해준 DLL을 그냥 받아 쓸 수 없고**, 본인 SPT 설치본에 대고 빌드해야 합니다:
+
+```
+dotnet build SPT-LootRadius.csproj -c Release
+```
+
+`SptRoot` 기본값이 `E:\SPT 4.1` 이라 그대로 빌드하면 되고, 빌드가 끝나면 `BepInEx\plugins\`
+로 알아서 복사됩니다. 서버 모드는 없습니다.
+
+껍데기 `spt-reflection.dll`(버전 1.0.0.0)에 대고 빌드하면 **컴파일은 되고 런처에서만 막히는**
+DLL이 나오기 때문에, 그 경우 빌드가 에러로 멈추도록 해뒀습니다.
 
 ## 4.1 포팅에서 바뀐 것
 
@@ -116,6 +132,12 @@ dotnet build SPT-LootRadius.csproj -c Release
 `SptRoot` 기본값은 `E:\SPT 4.1` 입니다. 다르면 `-p:SptRoot="D:\내경로"`. 빌드하면
 `BepInEx\plugins\` 로 자동 복사됩니다 (`-p:SkipDeploy=true` 로 끄고, Windows 외에서
 강제하려면 `-p:OS=Windows_NT`).
+
+빌드 로그에 참조된 SPT 버전이 찍힙니다:
+
+```
+spt-reflection 4.1.5.0 - plugin will be stamped for that SPT version.
+```
 
 ## 검증
 
