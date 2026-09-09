@@ -1,28 +1,26 @@
-﻿using SPT.Reflection.Patching;
-using EFT.Interactive;
-using EFT.UI;
-using EFT;
-using HarmonyLib;
-using System;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
-using UnityEngine;
 using Comfort.Common;
 using DrakiaXYZ.LootRadius.Helpers;
+using EFT;
+using EFT.Interactive;
 using EFT.InventoryLogic;
+using EFT.UI;
 using EFT.UI.DragAndDrop;
+using HarmonyLib;
+using SPT.Reflection.Patching;
+using UnityEngine;
 
 namespace DrakiaXYZ.LootRadius.Patches
 {
     public class LootPanelOpenPatch : ModulePatch
     {
         private static FieldInfo _rightPaneField;
-        private static FieldInfo _simplePanelField;
         private static FieldInfo _containedGridsViewField;
         private static LayerMask _interactiveLayerMask = 1 << LayerMask.NameToLayer("Interactive");
 
-        private static StashItemClass _stash
+        private static Stash _stash
         {
             get { return LootRadiusPlugin.RadiusStash; }
             set { LootRadiusPlugin.RadiusStash = value; }
@@ -30,26 +28,30 @@ namespace DrakiaXYZ.LootRadius.Patches
 
         protected override MethodBase GetTargetMethod()
         {
-            // Find the variable that stores the right hand grid in the ItemUiContext, so we can Ctrl+Click
-            _rightPaneField = AccessTools.GetDeclaredFields(typeof(ItemUiContext)).Single(x => x.FieldType == typeof(CompoundItem[]));
+            // Named _rightPanelItem in 4.1. 3.11 found it by searching for the single CompoundItem[]
+            // field because the name was obfuscated; ItemUiContext has since gained two more
+            // CompoundItem[] members (PlayerCollections, PlayerStash), and while those are
+            // properties rather than fields, matching by name is no longer a guess.
+            _rightPaneField = AccessTools.Field(typeof(ItemUiContext), "_rightPanelItem");
 
-            // Used for removing an item from the GridView
-            _simplePanelField = AccessTools.Field(typeof(SimpleStashPanel), "_simplePanel");
-            _containedGridsViewField = AccessTools.Field(typeof(SearchableItemView), "containedGridsView_0");
+            // containedGridsView_0 in 3.11. _simplePanel is public now, so it needs no reflection.
+            _containedGridsViewField = AccessTools.Field(typeof(SearchableItemView), "_containedGridsView");
 
             return typeof(ItemsPanel).GetMethod(nameof(ItemsPanel.Show));
         }
 
+        // ItemsPanel.Show grew from 4 parameters to 14 in 4.1. Harmony binds by name, so only the
+        // ones actually used are declared here.
         [PatchPostfix]
         public static async void PatchPostfix(
             ItemsPanel __instance,
             Task __result,
-            ItemContextAbstractClass sourceContext,
+            ItemContext sourceContext,
             CompoundItem lootItem,
             InventoryController inventoryController,
             ItemsPanel.EItemsTab currentTab,
-            SimpleStashPanel ____simpleStashPanel,
-            AddViewListClass ___UI
+            SortingTable sortingTable,
+            UIParent ___UI
         )
         {
             // Wait for original to finish
@@ -61,7 +63,11 @@ namespace DrakiaXYZ.LootRadius.Patches
                 return;
             }
 
-            LootRadiusStashGrid grid = _stash.Grids[0] as LootRadiusStashGrid;
+            if (_stash == null || !(_stash.Grid is LootRadiusStashGrid grid))
+            {
+                return;
+            }
+
             Vector3 playerPosition = Singleton<GameWorld>.Instance.MainPlayer.Position;
 
             // First find any items directly near the player's feet, to allow them to loot things like items slightly under the floor
@@ -73,14 +79,25 @@ namespace DrakiaXYZ.LootRadius.Patches
             Collider[] nearbyItemColliders = Physics.OverlapSphere(playerPosition, Settings.LootRadius.Value, _interactiveLayerMask);
             AddAllowedItems(grid, nearbyItemColliders, false);
 
-            // Show the stash in the inventory panel
-            ____simpleStashPanel.Show(_stash, inventoryController, sourceContext.CreateChild(_stash), true, inventoryController, currentTab);
-            ___UI.AddDisposable<SimpleStashPanel>(____simpleStashPanel);
+            // Show the stash in the inventory panel. SimpleStashPanel.Show gained a sorting table and
+            // a search-availability mode in 4.1; loot picked up off the ground is already "searched",
+            // so the panel gets full availability.
+            var simpleStashPanel = __instance._simpleStashPanel;
+            simpleStashPanel.Show(
+                _stash,
+                inventoryController,
+                sourceContext.CreateChild(_stash),
+                true,
+                sortingTable,
+                SimpleStashPanel.EStashSearchAvailability.All,
+                inventoryController,
+                currentTab);
+
+            ___UI.AddDisposable(simpleStashPanel);
 
             _rightPaneField.SetValue(ItemUiContext.Instance, new CompoundItem[] { _stash });
 
-            var simplePanel = _simplePanelField.GetValue(____simpleStashPanel) as SearchableItemView;
-            var containedGridsView = _containedGridsViewField.GetValue(simplePanel) as ContainedGridsView;
+            var containedGridsView = _containedGridsViewField.GetValue(simpleStashPanel._simplePanel) as ContainedGridsView;
             grid.GridViews = containedGridsView.GridViews;
         }
 
@@ -107,7 +124,8 @@ namespace DrakiaXYZ.LootRadius.Patches
             Vector3 startPos = Singleton<GameWorld>.Instance.MainPlayer.MainParts[BodyPartType.head].Position;
 
             // LineCast returns true if it hits a HighPolyCollider, indicating the item isn't within line of sight of the player's head
-            if (Physics.Linecast(startPos, endPos, LayerMaskClass.HighPolyWithTerrainMask))
+            // LayerMaskClass in 3.11.
+            if (Physics.Linecast(startPos, endPos, LayersMaskController.HighPolyWithTerrainMask))
             {
                 return false;
             }
