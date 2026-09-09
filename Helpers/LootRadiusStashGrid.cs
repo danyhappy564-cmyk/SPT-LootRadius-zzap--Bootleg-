@@ -1,34 +1,37 @@
-﻿using EFT.InventoryLogic;
 using System;
-
-using StashGridCollectionClass = GClass2924;
-using FreeSpaceInventoryErrorClass = StashGridClass.GClass3784;
-using FilterInventoryErrorClass = StashGridClass.GClass3785;
-using RemoveInventoryErrorClass = StashGridClass.GClass3786;
-using MaxCountInventoryErrorClass = StashGridClass.GClass3788;
-using ContainerRemoveEventClass = GClass3205;
-using ContainerAddEventClass = GClass3207;
-using ContainerRemoveEventResultStruct = GStruct455<GClass3205>;
-using ContainerAddEventResultStruct = GStruct455<GClass3207>;
-using EFT.UI.DragAndDrop;
-using EFT;
 using Comfort.Common;
-
+using Diz.LanguageExtensions;
+using EFT;
+using EFT.InventoryLogic;
+using EFT.UI.DragAndDrop;
 
 namespace DrakiaXYZ.LootRadius.Helpers
 {
     /**
-     * Custom StashGrid implementation that doesn't do parent ownership validation, and only allows removing items
+     * Custom grid implementation that doesn't do parent ownership validation, and only allows removing items
+     *
+     * SPT 4.1 note: this derives from Stash.StashGrid rather than the old StashGridClass, because a
+     * Stash now keeps its grid in a strongly typed `_grid` field of that exact type. Deriving from
+     * the plain Grid base would still fill Stash.Grids[], but would leave `_grid` pointing at the
+     * factory's original grid - and the two are the same object in a real stash.
      */
-    class LootRadiusStashGrid : StashGridClass
+    internal class LootRadiusStashGrid : Stash.StashGrid
     {
-        public static string GRIDID = "67e0b18aeef9ae200b0495f0";
+        public const string GRIDID = "67e0b18aeef9ae200b0495f0";
+        public const string GRIDNAME = "lootRadiusGrid";
+
         public GridView[] GridViews { get; set; } = null;
 
-        public override StashGridCollectionClass ItemCollection { get; } = new LootRadiusStashGridCollection();
+        public override GridItemCollection ItemCollection { get; } = new LootRadiusGridItemCollection();
 
-        public LootRadiusStashGrid(string id, CompoundItem parentItem) : 
-            base(id, 10, 10, true, false, Array.Empty<ItemFilter>(), parentItem, -1) { }
+        /**
+         * Stash.StashGrid only takes (template, parent), so the shape of the grid is described by a
+         * throwaway Grid built with the same arguments the 3.11 version passed to its base.
+         */
+        public LootRadiusStashGrid(Stash parentItem)
+            : base(new Grid(GRIDNAME, 10, 10, true, false, Array.Empty<ItemFilter>(), parentItem, -1), parentItem)
+        {
+        }
 
         /**
          * Don't allow moving items around in the custom grid, but allow adding new items
@@ -41,56 +44,60 @@ namespace DrakiaXYZ.LootRadius.Helpers
         /**
          * Simplified item adding, as we know the incoming data is sane. This removes any chance of accidentally changing the item address
          */
-        public override ContainerAddEventResultStruct AddInternal(Item item, LocationInGrid location, bool simulate, bool ignoreRestrictions)
+        public override OperationResult<GridAddResult> AddInternal(Item item, LocationInGrid location, bool simulate, bool ignoreRestrictions)
         {
             if (location == null)
             {
-                return new FreeSpaceInventoryErrorClass(item, this);
+                return new NoFreeSpaceError(item, this);
             }
 
             if (!ignoreRestrictions && !this.CheckCompatibility(item))
             {
-                return new FilterInventoryErrorClass(item, this);
+                return new ItemFiltersWontAllowError(item, this);
             }
 
-            GInterface381 resizeResult = default(GStruct395);
+            IContainerResizeResult resizeResult = default(NoContainerResizeResult);
             var newAddress = this.CreateItemAddress(location);
             if (simulate)
             {
-                return new ContainerAddEventClass(this, item, newAddress, item.StackObjectsCount, resizeResult, true);
+                return new GridAddResult(this, item, newAddress, item.StackObjectsCount, resizeResult, true);
             }
 
-            XYCellSizeStruct originalGridSize = new XYCellSizeStruct(this.GridWidth, this.GridHeight);
-            this.method_9(item, location);
-            XYCellSizeStruct newGridSize = new XYCellSizeStruct(this.GridWidth, this.GridHeight);
-            
+            IntVec2 originalGridSize = new IntVec2(this.GridWidth, this.GridHeight);
+            this.PlaceItem(item, location);
+            IntVec2 newGridSize = new IntVec2(this.GridWidth, this.GridHeight);
+
             if (originalGridSize != newGridSize)
             {
-                resizeResult = new GStruct396(this, originalGridSize, newGridSize);
+                resizeResult = new GridResizeResult(this, originalGridSize, newGridSize);
             }
 
-            return new ContainerAddEventClass(this, item, newAddress, item.StackObjectsCount, resizeResult, false);
+            return new GridAddResult(this, item, newAddress, item.StackObjectsCount, resizeResult, false);
         }
 
         /**
          * More simple item removal handling
          */
-        public override ContainerRemoveEventResultStruct RemoveInternal(Item item, bool simulate, bool ignoreRestrictions)
+        public override OperationResult<ContainerRemoveResult> RemoveInternal(Item item, bool simulate, bool ignoreRestrictions)
         {
             if (!base.Contains(item))
             {
-                return new RemoveInventoryErrorClass(item, this);
+                return new ItemNotInGridError(item, this);
             }
 
             LocationInGrid locationInGrid = this.ItemCollection[item];
             if (!simulate)
             {
-                base.method_10(item, locationInGrid, true);
+                // 3.11 passed `true` here; 4.1's own RemoveInternal passes false and then fixes the
+                // space buffer itself. This grid never stretches and holds no overlapping items, so
+                // there is no buffer to revalidate either way.
+                base.RemoveItem(item, locationInGrid, false);
             }
-            return new ContainerRemoveEventClass(item, base.CreateItemAddress(locationInGrid), simulate);
+
+            return new ContainerRemoveResult(item, base.CreateItemAddress(locationInGrid), simulate);
         }
 
-        public void OwnerRemoveItemEvent(GEventArgs3 args)
+        public void OwnerRemoveItemEvent(RemoveItemEventArgs args)
         {
             if (args.Status != CommandStatus.Succeed)
             {
@@ -115,8 +122,11 @@ namespace DrakiaXYZ.LootRadius.Helpers
 
                 foreach (var gridView in GridViews)
                 {
-                    gridView.OnItemRemoved(new GEventArgs3(item, location, CommandStatus.Begin, owner));
-                    gridView.OnItemRemoved(new GEventArgs3(item, location, CommandStatus.Succeed, owner));
+                    // GridView.OnItemRemoved is an explicit IRemoveHandler implementation in 4.1,
+                    // so it is no longer reachable through the GridView reference itself.
+                    IRemoveHandler handler = gridView;
+                    handler.OnItemRemoved(new RemoveItemEventArgs(item, location, CommandStatus.Begin, owner));
+                    handler.OnItemRemoved(new RemoveItemEventArgs(item, location, CommandStatus.Succeed, owner));
                 }
             }
 
@@ -126,12 +136,13 @@ namespace DrakiaXYZ.LootRadius.Helpers
         /**
          * Custom grid collection that doesn't do address validation
          */
-        internal class LootRadiusStashGridCollection : StashGridCollectionClass
+        internal class LootRadiusGridItemCollection : GridItemCollection
         {
-            public override void Add(Item item, StashGridClass grid, LocationInGrid location)
+            public override void Add(Item item, Grid grid, LocationInGrid location)
             {
-                this.dictionary_0[item] = location;
-                this.list_0.Add(item);
+                // dictionary_0 / list_0 in 3.11; both are plainly named public fields in 4.1.
+                this.Items[item] = location;
+                this.ItemsList.Add(item);
 
                 if (item.CurrentAddress == null)
                 {
@@ -139,10 +150,10 @@ namespace DrakiaXYZ.LootRadius.Helpers
                 }
             }
 
-            public override void Remove(Item item, StashGridClass grid)
+            public override void Remove(Item item, Grid grid)
             {
-                this.dictionary_0.Remove(item);
-                this.list_0.Remove(item);
+                this.Items.Remove(item);
+                this.ItemsList.Remove(item);
 
                 if (item.CurrentAddress?.Container?.ID == grid.ID)
                 {

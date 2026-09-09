@@ -1,17 +1,20 @@
-﻿using Comfort.Common;
-using EFT;
-using EFT.InventoryLogic;
-using SPT.Reflection.Patching;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Comfort.Common;
+using DrakiaXYZ.LootRadius.Helpers;
+using EFT;
+using EFT.InventoryLogic;
+using SPT.Reflection.Patching;
+
 namespace DrakiaXYZ.LootRadius.Patches
 {
     class LootRadiusQuickMovePatch : ModulePatch
     {
         protected override MethodBase GetTargetMethod()
         {
-            return typeof(InteractionsHandlerClass).GetMethod(nameof(InteractionsHandlerClass.QuickFindAppropriatePlace));
+            // InteractionsHandlerClass in 3.11.
+            return typeof(ItemManipulator).GetMethod(nameof(ItemManipulator.QuickFindAppropriatePlace));
         }
 
         [PatchPrefix]
@@ -24,7 +27,9 @@ namespace DrakiaXYZ.LootRadius.Patches
             }
 
             // Don't do anything if the only target isn't the loot radius grid
-            if (targets.Count() != 1 || targets.ElementAt(0).Grids?.Length == 0 || targets.ElementAt(0).Grids?.ElementAt(0)?.ID != "lootRadiusGrid")
+            if (targets.Count() != 1
+                || targets.ElementAt(0).Grids?.Length == 0
+                || targets.ElementAt(0).Grids?.ElementAt(0)?.ID != LootRadiusStashGrid.GRIDNAME)
             {
                 return;
             }
