@@ -83,6 +83,24 @@
   <Target Name="EnsureSptRoot" BeforeTargets="BeforeBuild;ResolveAssemblyReferences">
     <Error Condition="!Exists('$(SptManaged)\Assembly-CSharp.dll')"
            Text="SptRoot '$(SptRoot)' does not look like an SPT install (missing EscapeFromTarkov_Data\Managed\Assembly-CSharp.dll). Pass -p:SptRoot=... or set the SptRoot environment variable." />
+    <Error Condition="!Exists('$(SptBepInEx)\plugins\spt\spt-reflection.dll')"
+           Text="SptRoot '$(SptRoot)' has no BepInEx\plugins\spt\spt-reflection.dll. The mod cannot be stamped with an SPT version without it." />
+  </Target>
+
+  <!--
+    SPT's launcher decides which version a plugin was "built for" by reading the version of the
+    spt-reflection assembly it references, and refuses to start the game on a mismatch. Building
+    against a placeholder copy of that dll therefore produces a plugin that compiles, loads under
+    Harmony, and is then rejected at launch with "built for SPT 1.0.0" - a failure that shows up
+    nowhere until someone tries to play. Fail the build instead.
+  -->
+  <Target Name="EnsureRealSptReflection" AfterTargets="EnsureSptRoot" BeforeTargets="BeforeBuild;ResolveAssemblyReferences">
+    <GetAssemblyIdentity AssemblyFiles="$(SptBepInEx)\plugins\spt\spt-reflection.dll">
+      <Output TaskParameter="Assemblies" ItemName="_SptReflectionIdentity" />
+    </GetAssemblyIdentity>
+    <Error Condition="'%(_SptReflectionIdentity.Version)' == '1.0.0.0'"
+           Text="spt-reflection.dll under SptRoot '$(SptRoot)' reports version 1.0.0.0, which is a placeholder rather than a real SPT install. A plugin built against it is rejected by the launcher as 'built for SPT 1.0.0'. Point SptRoot at an actual SPT installation." />
+    <Message Text="spt-reflection %(_SptReflectionIdentity.Version) - plugin will be stamped for that SPT version." Importance="high" />
   </Target>
 
   <!--
