@@ -116,4 +116,28 @@
     <Message Text="Deployed $(TargetFileName) to $(SptBepInEx)\plugins" Importance="high" />
   </Target>
 
+
+  <!--
+    Rule 2-2: every Release build also drops a ready-to-ship archive in release/.
+    Skip with -p:SkipPackage=true.
+  -->
+  <Target Name="PackageRelease" AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Release' AND '$(SkipPackage)' != 'true'">
+    <PropertyGroup>
+      <PackageStageDir>$(IntermediateOutputPath)package\</PackageStageDir>
+      <PackageZipDir>$(MSBuildThisFileDirectory)release\</PackageZipDir>
+      <PackageZipPath>$(PackageZipDir)$(AssemblyName)-$(Version).zip</PackageZipPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <PackageFiles Include="$(OutputPath)**\*" Exclude="$(OutputPath)**\*.pdb;$(OutputPath)**\*.deps.json" />
+    </ItemGroup>
+    <RemoveDir Directories="$(PackageStageDir)" />
+    <Copy SourceFiles="@(PackageFiles)"
+          DestinationFiles="@(PackageFiles->'$(PackageStageDir)%(RecursiveDir)%(Filename)%(Extension)')" />
+    <MakeDir Directories="$(PackageZipDir)" />
+    <Delete Files="$(PackageZipPath)" />
+    <ZipDirectory SourceDirectory="$(PackageStageDir)" DestinationFile="$(PackageZipPath)" Overwrite="true" />
+    <Message Text="Packaged $(PackageZipPath)" Importance="high" />
+  </Target>
+
 </Project>
